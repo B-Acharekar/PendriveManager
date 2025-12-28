@@ -4,7 +4,7 @@ from PySide6.QtWidgets import (
 )
 from core.device_detector import get_removable_devices
 from core.formatter import format_usb_device
-
+from core.speed_test import write_speed_test, read_speed_test
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -18,6 +18,7 @@ class MainWindow(QMainWindow):
 
         self.refresh_btn = QPushButton("Refresh Devices")
         self.format_btn = QPushButton("Format Drive")
+        self.speed_btn = QPushButton("Test Speed")
 
         self.fs_combo = QComboBox()
         self.fs_combo.addItems(["FAT32", "exFAT", "NTFS"])
@@ -36,6 +37,7 @@ class MainWindow(QMainWindow):
         controls_layout.addWidget(self.fs_combo)
         controls_layout.addWidget(self.quick_checkbox)
         controls_layout.addWidget(self.format_btn)
+        controls_layout.addWidget(self.speed_btn)
         main_layout.addLayout(controls_layout)
 
         # Status label at bottom
@@ -48,6 +50,7 @@ class MainWindow(QMainWindow):
         # --- Signals ---
         self.refresh_btn.clicked.connect(self.load_devices)
         self.format_btn.clicked.connect(self.format_selected)
+        self.speed_btn.clicked.connect(self.test_speed)
 
         # Load USBs initially
         self.load_devices()
@@ -120,3 +123,39 @@ class MainWindow(QMainWindow):
             self.load_devices()
         except Exception as e:
             self.status_label.setText(f"Error: {e}")
+
+    def test_speed(self):
+        selected = self.list_widget.currentItem()
+        if not selected:
+            self.status_label.setText("Select a device first")
+            return
+
+        drive_letter = selected.text().split("|")[0].strip()
+
+        reply = QMessageBox.question(
+            self,
+            "Speed Test",
+            f"Run read/write speed test on {drive_letter}?\n\n"
+            "A temporary test file will be created and deleted.",
+            QMessageBox.Yes | QMessageBox.No
+        )
+        if reply != QMessageBox.Yes:
+            return
+
+        try:
+            self.status_label.setText("Testing write speed...")
+            self.repaint()
+
+            write_speed = write_speed_test(drive_letter)
+
+            self.status_label.setText("Testing read speed...")
+            self.repaint()
+
+            read_speed = read_speed_test(drive_letter)
+
+            self.status_label.setText(
+                f"Write: {write_speed} MB/s | Read: {read_speed} MB/s"
+            )
+
+        except Exception as e:
+            self.status_label.setText(f"Speed test failed: {e}")
