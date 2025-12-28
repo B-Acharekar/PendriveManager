@@ -1,180 +1,218 @@
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QPushButton, QListWidget, QLabel, QComboBox, QCheckBox, QMessageBox
+    QPushButton, QLabel, QComboBox,
+    QCheckBox, QMessageBox, QProgressBar
 )
+from PySide6.QtCharts import QChart, QChartView, QBarSeries, QBarSet, QValueAxis
+from PySide6.QtGui import QPainter
+from PySide6.QtCore import Qt, QThread, Signal
+from PySide6.QtWidgets import QApplication
+
+from ui.sidebar import Sidebar
+from ui.theme import DARK_THEME, LIGHT_THEME
+
 from core.device_detector import get_removable_devices
 from core.formatter import format_usb_device
 from core.speed_test import write_speed_test, read_speed_test
 from core.health_check import check_usb_health
 
+
+# ---------- THREADS ----------
+class SpeedThread(QThread):
+    done = Signal(float, float)
+
+    def __init__(self, drive):
+        super().__init__()
+        self.drive = drive
+
+    def run(self):
+        self.done.emit(
+            write_speed_test(self.drive),
+            read_speed_test(self.drive)
+        )
+
+
+class HealthThread(QThread):
+    done = Signal(dict)
+
+    def __init__(self, drive):
+        super().__init__()
+        self.drive = drive
+
+    def run(self):
+        self.done.emit(check_usb_health(self.drive))
+
+
+# ---------- MAIN ----------
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Pendrive Manager")
-        self.setMinimumSize(700, 450)
+        self.setWindowTitle("USB NOVA")
+        self.resize(960, 560)
 
-        # --- Widgets ---
-        self.list_widget = QListWidget()
-        self.status_label = QLabel("Ready")
+        self.dark_mode = True
+        self.current_device = None
 
-        self.refresh_btn = QPushButton("Refresh Devices")
-        self.format_btn = QPushButton("Format Drive")
-        self.speed_btn = QPushButton("Test Speed")
-        self.health_btn = QPushButton("Health Check")
+        # ===== SIDEBAR =====
+        self.sidebar = Sidebar()
+        self.sidebar.device_selected.connect(self.on_device_selected)
 
-        self.fs_combo = QComboBox()
-        self.fs_combo.addItems(["FAT32", "exFAT", "NTFS"])
-        self.quick_checkbox = QCheckBox("Quick Format")
-        self.quick_checkbox.setChecked(True)
+        # ===== HEADER =====
+        title = QLabel("USB NOVA")
+        title.setStyleSheet("font-size:18px;font-weight:700;")
 
-        # --- Layouts ---
-        main_layout = QVBoxLayout()
-        main_layout.addWidget(self.list_widget)
+        subtitle = QLabel("Pendrive Manager")
+        subtitle.setObjectName("Subtitle")
 
-        # Bottom controls
-        controls_layout = QHBoxLayout()
-        controls_layout.addWidget(self.refresh_btn)
-        controls_layout.addStretch()
-        controls_layout.addWidget(QLabel("FileSystem:"))
-        controls_layout.addWidget(self.fs_combo)
-        controls_layout.addWidget(self.quick_checkbox)
-        controls_layout.addWidget(self.format_btn)
-        controls_layout.addWidget(self.speed_btn)
-        controls_layout.addWidget(self.health_btn)
-        main_layout.addLayout(controls_layout)
+        self.theme_btn = QPushButton("🌙")
+        self.theme_btn.setFixedWidth(36)
+        self.theme_btn.clicked.connect(self.toggle_theme)
 
-        # Status label at bottom
-        main_layout.addWidget(self.status_label)
+        self.refresh_btn = QPushButton("↻")
+        self.refresh_btn.setFixedWidth(36)
+        self.refresh_btn.clicked.connect(self.refresh_devices)
+
+        header_row = QHBoxLayout()
+        header_row.addWidget(title)
+        header_row.addStretch()
+        header_row.addWidget(self.refresh_btn)
+        header_row.addWidget(self.theme_btn)
+
+        header = QVBoxLayout()
+        header.addLayout(header_row)
+        header.addWidget(subtitle)
+
+        # ===== CONTROLS =====
+        self.fs = QComboBox()
+        self.fs.addItems(["FAT32", "exFAT", "NTFS"])
+
+        self.quick = QCheckBox("Quick")
+
+        self.btn_format = QPushButton("Format")
+        self.btn_speed = QPushButton("Speed")
+        self.btn_health = QPushButton("Health")
+
+        controls = QHBoxLayout()
+        controls.addWidget(self.fs)
+        controls.addWidget(self.quick)
+        controls.addStretch()
+        controls.addWidget(self.btn_format)
+        controls.addWidget(self.btn_speed)
+        controls.addWidget(self.btn_health)
+
+        # ===== HEALTH =====
+        self.health = QProgressBar()
+        self.health.setFixedHeight(18)
+        self.health.setFormat("Health —")
+
+        # ===== CHART =====
+        self.chart = QChart()
+        self.chart.setBackgroundBrush(Qt.transparent)
+        self.chart.legend().setVisible(False)
+
+        self.chart_view = QChartView(self.chart)
+        self.chart_view.setRenderHint(QPainter.Antialiasing)
+
+        # ===== STATUS =====
+        self.status = QLabel("Ready")
+        self.status.setObjectName("StatusLabel")
+
+        # ===== MAIN PANEL =====
+        panel = QVBoxLayout()
+        panel.setContentsMargins(10, 10, 10, 10)
+        panel.setSpacing(8)
+        panel.addLayout(header)
+        panel.addLayout(controls)
+        panel.addWidget(self.health)
+        panel.addWidget(self.chart_view)
+        panel.addWidget(self.status)
+
+        panel_widget = QWidget()
+        panel_widget.setLayout(panel)
+
+        root = QHBoxLayout()
+        root.addWidget(self.sidebar)
+        root.addWidget(panel_widget, 1)
 
         container = QWidget()
-        container.setLayout(main_layout)
+        container.setLayout(root)
         self.setCentralWidget(container)
 
-        # --- Signals ---
-        self.refresh_btn.clicked.connect(self.load_devices)
-        self.format_btn.clicked.connect(self.format_selected)
-        self.speed_btn.clicked.connect(self.test_speed)
-        self.health_btn.clicked.connect(self.check_health)
+        # ===== SIGNALS =====
+        self.btn_format.clicked.connect(self.format_drive)
+        self.btn_speed.clicked.connect(self.speed_test)
+        self.btn_health.clicked.connect(self.health_check)
 
-        # Load USBs initially
-        self.load_devices()
+        # ===== INIT =====
+        QApplication.instance().setStyleSheet(DARK_THEME)
+        self.refresh_devices()
 
-        # --- Minimal Monochrome Styling ---
-        self.setStyleSheet("""
-            QWidget {
-                font-family: 'Segoe UI', sans-serif;
-                font-size: 11pt;
-                color: #222222;
-                background-color: #F5F5F5;
-            }
-            QListWidget {
-                border: 1px solid #CCCCCC;
-                background-color: #FFFFFF;
-                selection-background-color: #E0E0E0;
-            }
-            QPushButton {
-                border: 1px solid #AAAAAA;
-                padding: 5px 12px;
-                background-color: #FFFFFF;
-            }
-            QPushButton:hover {
-                background-color: #F0F0F0;
-            }
-            QComboBox, QCheckBox {
-                background-color: #FFFFFF;
-            }
-            QLabel {
-                padding: 2px;
-            }
-        """)
-
-    # --- Functions ---
-    def load_devices(self):
-        self.list_widget.clear()
+    # ---------- DEVICE ----------
+    def refresh_devices(self):
         devices = get_removable_devices()
-        if not devices:
-            self.status_label.setText("No USB devices detected")
+        self.sidebar.set_devices(devices)
+        self.status.setText(f"{len(devices)} device(s) detected")
+
+    def on_device_selected(self, device):
+        self.current_device = device
+        self.health.setValue(0)
+        self.health.setFormat("Health —")
+        self.chart.removeAllSeries()
+        self.status.setText(f"Selected {device.drive_letter}")
+
+    # ---------- ACTIONS ----------
+    def format_drive(self):
+        if not self.current_device:
             return
-
-        for dev in devices:
-            self.list_widget.addItem(
-                f"{dev.drive_letter} | {dev.label} | {dev.size_gb} GB | {dev.filesystem}"
-            )
-        self.status_label.setText(f"{len(devices)} device(s) detected")
-
-    def format_selected(self):
-        selected = self.list_widget.currentItem()
-        if not selected:
-            self.status_label.setText("Select a device first")
+        d = self.current_device.drive_letter
+        if QMessageBox.question(self, "Confirm", f"Format {d}?") != QMessageBox.Yes:
             return
+        format_usb_device(d, self.fs.currentText(), self.quick.isChecked())
+        self.refresh_devices()
 
-        drive_letter = selected.text().split("|")[0].strip()
-        filesystem = self.fs_combo.currentText()
-        quick = self.quick_checkbox.isChecked()
+    def speed_test(self):
+        if not self.current_device:
+            return
+        self.chart.removeAllSeries()
+        self.status.setText("Testing speed...")
+        self.t = SpeedThread(self.current_device.drive_letter)
+        self.t.done.connect(self.update_chart)
+        self.t.start()
 
-        reply = QMessageBox.question(
-            self,
-            "Confirm Format",
-            f"Are you sure you want to format {drive_letter} as {filesystem}? This will erase all data!",
-            QMessageBox.Yes | QMessageBox.No
+    def update_chart(self, w, r):
+        s = QBarSeries()
+        ws = QBarSet("Write"); ws.append(w)
+        rs = QBarSet("Read"); rs.append(r)
+        s.append(ws); s.append(rs)
+        self.chart.addSeries(s)
+
+        ax = QValueAxis()
+        ax.setRange(0, max(w, r) * 1.2)
+        self.chart.setAxisY(ax, s)
+        self.status.setText(f"W {w:.1f} MB/s | R {r:.1f} MB/s")
+
+    def health_check(self):
+        if not self.current_device:
+            return
+        self.status.setText("Checking health...")
+        self.h = HealthThread(self.current_device.drive_letter)
+        self.h.done.connect(self.update_health)
+        self.h.start()
+
+    def update_health(self, r):
+        pct = int(r.get("percentage", -1))
+        if pct >= 0:
+            self.health.setValue(pct)
+            self.health.setFormat(f"Health {pct}%")
+        else:
+            self.health.setFormat("Health Unknown")
+
+        self.status.setText(r.get("status", "Unknown"))
+
+    # ---------- THEME ----------
+    def toggle_theme(self):
+        self.dark_mode = not self.dark_mode
+        QApplication.instance().setStyleSheet(
+            DARK_THEME if self.dark_mode else LIGHT_THEME
         )
-        if reply != QMessageBox.Yes:
-            return
-
-        try:
-            format_usb_device(drive_letter, filesystem=filesystem, quick_format=quick)
-            self.status_label.setText(f"{drive_letter} formatted successfully")
-            self.load_devices()
-        except Exception as e:
-            self.status_label.setText(f"Error: {e}")
-
-    def test_speed(self):
-        selected = self.list_widget.currentItem()
-        if not selected:
-            self.status_label.setText("Select a device first")
-            return
-
-        drive_letter = selected.text().split("|")[0].strip()
-
-        reply = QMessageBox.question(
-            self,
-            "Speed Test",
-            f"Run read/write speed test on {drive_letter}?\n\n"
-            "A temporary test file will be created and deleted.",
-            QMessageBox.Yes | QMessageBox.No
-        )
-        if reply != QMessageBox.Yes:
-            return
-
-        try:
-            self.status_label.setText("Testing write speed...")
-            self.repaint()
-
-            write_speed = write_speed_test(drive_letter)
-
-            self.status_label.setText("Testing read speed...")
-            self.repaint()
-
-            read_speed = read_speed_test(drive_letter)
-
-            self.status_label.setText(
-                f"Write: {write_speed} MB/s | Read: {read_speed} MB/s"
-            )
-
-        except Exception as e:
-            self.status_label.setText(f"Speed test failed: {e}")
-
-    def check_health(self):
-        selected = self.list_widget.currentItem()
-        if not selected:
-            self.status_label.setText("Select a device first")
-            return
-
-        drive_letter = selected.text().split("|")[0].strip()
-
-        try:
-            from core.health_check import check_usb_health
-            result = check_usb_health(drive_letter)
-            self.status_label.setText(f"{drive_letter} health: {result['status']} - {result['message']}")
-        except Exception as e:
-            self.status_label.setText(f"Health check failed: {e}")
+        self.theme_btn.setText("🌙" if self.dark_mode else "☀️")
