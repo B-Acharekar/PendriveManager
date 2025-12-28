@@ -1,4 +1,4 @@
-# Pendrive Manager (Working Title)
+# Pendrive Manager (USB Nova)
 
 **Version:** 1.0  
 **Prepared By:** B-Acharekar [https://github.com/B-Acharekar]  
