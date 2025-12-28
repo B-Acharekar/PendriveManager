@@ -12,6 +12,8 @@ venv/
 dist/
 build/
 *.egg-info/
+*.pkg
+*.spec
 
 # Unit test / coverage reports
 .pytest_cache/
