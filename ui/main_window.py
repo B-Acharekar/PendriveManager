@@ -5,6 +5,7 @@ from PySide6.QtWidgets import (
 from core.device_detector import get_removable_devices
 from core.formatter import format_usb_device
 from core.speed_test import write_speed_test, read_speed_test
+from core.health_check import check_usb_health
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -19,6 +20,7 @@ class MainWindow(QMainWindow):
         self.refresh_btn = QPushButton("Refresh Devices")
         self.format_btn = QPushButton("Format Drive")
         self.speed_btn = QPushButton("Test Speed")
+        self.health_btn = QPushButton("Health Check")
 
         self.fs_combo = QComboBox()
         self.fs_combo.addItems(["FAT32", "exFAT", "NTFS"])
@@ -38,6 +40,7 @@ class MainWindow(QMainWindow):
         controls_layout.addWidget(self.quick_checkbox)
         controls_layout.addWidget(self.format_btn)
         controls_layout.addWidget(self.speed_btn)
+        controls_layout.addWidget(self.health_btn)
         main_layout.addLayout(controls_layout)
 
         # Status label at bottom
@@ -51,6 +54,7 @@ class MainWindow(QMainWindow):
         self.refresh_btn.clicked.connect(self.load_devices)
         self.format_btn.clicked.connect(self.format_selected)
         self.speed_btn.clicked.connect(self.test_speed)
+        self.health_btn.clicked.connect(self.check_health)
 
         # Load USBs initially
         self.load_devices()
@@ -159,3 +163,18 @@ class MainWindow(QMainWindow):
 
         except Exception as e:
             self.status_label.setText(f"Speed test failed: {e}")
+
+    def check_health(self):
+        selected = self.list_widget.currentItem()
+        if not selected:
+            self.status_label.setText("Select a device first")
+            return
+
+        drive_letter = selected.text().split("|")[0].strip()
+
+        try:
+            from core.health_check import check_usb_health
+            result = check_usb_health(drive_letter)
+            self.status_label.setText(f"{drive_letter} health: {result['status']} - {result['message']}")
+        except Exception as e:
+            self.status_label.setText(f"Health check failed: {e}")
